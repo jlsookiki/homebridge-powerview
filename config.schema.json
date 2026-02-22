@@ -1,0 +1,110 @@
+{
+  "pluginAlias": "PowerView",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Hunter Douglas PowerView plugin with Gen 1 hub support. All requests are serialized and retried automatically.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "PowerView",
+        "required": true
+      },
+      "host": {
+        "title": "Hub IP Address or Hostname",
+        "type": "string",
+        "default": "powerview-hub.local",
+        "required": true,
+        "description": "IP address or hostname of your PowerView hub."
+      },
+      "refreshShades": {
+        "title": "Refresh Shade Positions",
+        "type": "boolean",
+        "default": true,
+        "description": "Request fresh position data from shades on each poll (uses ?refresh=true). Causes the hub to query each shade via RF."
+      },
+      "pollShadesForUpdate": {
+        "title": "Poll for Updates",
+        "type": "boolean",
+        "default": true,
+        "description": "Periodically poll the hub for shade position changes."
+      },
+      "pollIntervalMs": {
+        "title": "Poll Interval (ms)",
+        "type": "integer",
+        "default": 60000,
+        "minimum": 10000,
+        "maximum": 600000,
+        "description": "How often to poll all shades for updates (default: 60s). Increase if your Gen 1 hub is unstable."
+      },
+      "requestIntervalMs": {
+        "title": "Request Spacing (ms)",
+        "type": "integer",
+        "default": 500,
+        "minimum": 100,
+        "maximum": 5000,
+        "description": "Delay between queued requests to the hub (default: 500ms). Gen 1 hubs need 500ms+."
+      },
+      "requestTimeoutMs": {
+        "title": "Request Timeout (ms)",
+        "type": "integer",
+        "default": 10000,
+        "minimum": 3000,
+        "maximum": 30000,
+        "description": "How long to wait for the hub to respond before timing out."
+      },
+      "maxRetries": {
+        "title": "Max Retries",
+        "type": "integer",
+        "default": 2,
+        "minimum": 0,
+        "maximum": 5,
+        "description": "Number of retry attempts for transient errors (ECONNRESET, timeouts)."
+      },
+      "verifyCommands": {
+        "title": "Verify Commands",
+        "type": "boolean",
+        "default": true,
+        "description": "After sending a shade command, re-read position to confirm it was applied. Fixes missed automations."
+      },
+      "verifyDelayMs": {
+        "title": "Verify Delay (ms)",
+        "type": "integer",
+        "default": 5000,
+        "minimum": 2000,
+        "maximum": 15000,
+        "description": "How long to wait after a command before verifying the shade moved."
+      },
+      "forceRollerShades": {
+        "title": "Force Roller Shade IDs",
+        "type": "array",
+        "items": { "type": "integer" },
+        "default": [],
+        "description": "Shade IDs to force as roller type."
+      },
+      "forceTopBottomShades": {
+        "title": "Force Top-Bottom Shade IDs",
+        "type": "array",
+        "items": { "type": "integer" },
+        "default": [],
+        "description": "Shade IDs to force as top-bottom type."
+      },
+      "forceHorizontalShades": {
+        "title": "Force Horizontal Shade IDs",
+        "type": "array",
+        "items": { "type": "integer" },
+        "default": [],
+        "description": "Shade IDs to force as horizontal (Silhouette/Pirouette) type."
+      },
+      "forceVerticalShades": {
+        "title": "Force Vertical Shade IDs",
+        "type": "array",
+        "items": { "type": "integer" },
+        "default": [],
+        "description": "Shade IDs to force as vertical (Luminette) type."
+      }
+    }
+  }
+}

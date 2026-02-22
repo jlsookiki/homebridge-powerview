@@ -49,10 +49,9 @@ class PowerViewPlatform {
       requestIntervalMs: config.requestIntervalMs || 500,
       requestTimeoutMs: config.requestTimeoutMs || 10000,
       maxRetries: config.maxRetries != null ? config.maxRetries : 2,
+      concurrency: config.concurrency || 2,
     });
 
-    this.refreshShades = config.refreshShades !== false;
-    this.pollShadesForUpdate = config.pollShadesForUpdate !== false;
     this.pollIntervalMs = config.pollIntervalMs || 60000;
     this.verifyCommands = config.verifyCommands !== false;
     this.verifyDelayMs = config.verifyDelayMs || 5000;
@@ -67,14 +66,12 @@ class PowerViewPlatform {
     this.hubVersion = null;
 
     this.api.on('didFinishLaunching', () => {
-      this.log('PowerView plugin launched (queue interval: %dms, poll: %dms, verify: %s)',
-        config.requestIntervalMs || 500, this.pollIntervalMs, this.verifyCommands);
+      this.log('PowerView launched (queue: %dms, concurrency: %d, poll: %dms, verify: %s)',
+        config.requestIntervalMs || 500, config.concurrency || 2, this.pollIntervalMs, this.verifyCommands);
       this.updateHubInfo();
-      if (this.pollShadesForUpdate) {
+      this.updateShades(() => {
         this.pollShades();
-      } else {
-        this.updateShades();
-      }
+      });
     });
   }
 
@@ -99,7 +96,6 @@ class PowerViewPlatform {
 
   // ── Accessory lifecycle ─────────────────────────────────────────────
 
-  /** Called by Homebridge when loading cached accessories. */
   configureAccessory(accessory) {
     this.log('Cached shade %d: %s', accessory.context.shadeId, accessory.displayName);
     accessory.reachable = true;
@@ -112,7 +108,6 @@ class PowerViewPlatform {
     this.configureShadeAccessory(accessory);
   }
 
-  /** Creates a new shade accessory. */
   addShadeAccessory(shade) {
     const name = Buffer.from(shade.name, 'base64').toString();
     this.log('Adding shade %d: %s', shade.id, name);
@@ -128,7 +123,6 @@ class PowerViewPlatform {
     return accessory;
   }
 
-  /** Updates an existing shade accessory type if changed. */
   updateShadeAccessory(shade) {
     const accessory = this.accessories[shade.id];
     this.log('Updating shade %d: %s', shade.id, accessory.displayName);
@@ -143,14 +137,17 @@ class PowerViewPlatform {
     return accessory;
   }
 
-  /** Removes a shade accessory. */
   removeShadeAccessory(accessory) {
     this.log('Removing shade %d: %s', accessory.context.shadeId, accessory.displayName);
     this.api.unregisterPlatformAccessories('homebridge-powerview', 'PowerView', [accessory]);
     delete this.accessories[accessory.context.shadeId];
   }
 
-  /** Sets up characteristic callbacks for a shade accessory. */
+  /**
+   * Sets up characteristic callbacks for a shade accessory.
+   * No 'get' handlers — HomeKit reads the last value pushed via polling.
+   * Only 'set' handlers for user-initiated position changes.
+   */
   configureShadeAccessory(accessory) {
     const shadeId = accessory.context.shadeId;
     this.accessories[shadeId] = accessory;
@@ -161,21 +158,12 @@ class PowerViewPlatform {
       service = accessory.addService(Service.WindowCovering, accessory.displayName, SubType.BOTTOM);
     }
 
-    service.getCharacteristic(Characteristic.CurrentPosition)
-      .removeAllListeners('get')
-      .on('get', (cb) => this.getPosition(shadeId, Position.BOTTOM, cb));
-
     service.getCharacteristic(Characteristic.TargetPosition)
       .removeAllListeners('set')
       .on('set', (val, cb) => this.setPosition(shadeId, Position.BOTTOM, val, cb));
 
     // Horizontal vanes (Silhouette, Pirouette)
     if (accessory.context.shadeType === Shade.HORIZONTAL) {
-      service.getCharacteristic(Characteristic.CurrentHorizontalTiltAngle)
-        .setProps({ minValue: 0 })
-        .removeAllListeners('get')
-        .on('get', (cb) => this.getPosition(shadeId, Position.VANES, cb));
-
       service.getCharacteristic(Characteristic.TargetHorizontalTiltAngle)
         .setProps({ minValue: 0 })
         .removeAllListeners('set')
@@ -187,10 +175,6 @@ class PowerViewPlatform {
 
     // Vertical vanes (Luminette)
     if (accessory.context.shadeType === Shade.VERTICAL) {
-      service.getCharacteristic(Characteristic.CurrentVerticalTiltAngle)
-        .removeAllListeners('get')
-        .on('get', (cb) => this.getPosition(shadeId, Position.VANES, cb));
-
       service.getCharacteristic(Characteristic.TargetVerticalTiltAngle)
         .removeAllListeners('set')
         .on('set', (val, cb) => this.setPosition(shadeId, Position.VANES, val, cb));
@@ -206,10 +190,6 @@ class PowerViewPlatform {
         topService = accessory.addService(Service.WindowCovering, accessory.displayName, SubType.TOP);
       }
 
-      topService.getCharacteristic(Characteristic.CurrentPosition)
-        .removeAllListeners('get')
-        .on('get', (cb) => this.getPosition(shadeId, Position.TOP, cb));
-
       topService.getCharacteristic(Characteristic.TargetPosition)
         .removeAllListeners('set')
         .on('set', (val, cb) => this.setPosition(shadeId, Position.TOP, val, cb));
@@ -218,7 +198,6 @@ class PowerViewPlatform {
     }
   }
 
-  /** Helper: safely remove a characteristic if it exists. */
   _removeCharacteristicIfExists(service, characteristicType) {
     if (service.testCharacteristic(characteristicType)) {
       const c = service.getCharacteristic(characteristicType);
@@ -228,9 +207,8 @@ class PowerViewPlatform {
   }
 
 
-  // ── Shade value updates ─────────────────────────────────────────────
+  // ── Shade value updates (called by polling and SET responses) ───────
 
-  /** Parses shade positions from hub data and updates HomeKit characteristics. */
   updateShadeValues(shade, current = false) {
     const accessory = this.accessories[shade.id];
     if (!accessory) return null;
@@ -238,7 +216,7 @@ class PowerViewPlatform {
     let positions = null;
 
     if (shade.positions) {
-      this.log('Set for', shade.id, { positions: shade.positions });
+      this.log('Shade %d positions: %s', shade.id, JSON.stringify(shade.positions));
       positions = {};
 
       for (let i = 1; shade.positions['posKind' + i]; ++i) {
@@ -267,7 +245,6 @@ class PowerViewPlatform {
       }
     }
 
-    // Update accessory information.
     if (this.hubVersion) {
       const infoService = accessory.getService(Service.AccessoryInformation);
       if (infoService) {
@@ -288,7 +265,6 @@ class PowerViewPlatform {
     service.updateCharacteristic(Characteristic.TargetPosition, value);
     service.setCharacteristic(Characteristic.PositionState, Characteristic.PositionState.STOPPED);
 
-    // Reset vanes when shade position changes.
     if (accessory.context.shadeType === Shade.HORIZONTAL) {
       if (current) service.setCharacteristic(Characteristic.CurrentHorizontalTiltAngle, 0);
       service.updateCharacteristic(Characteristic.TargetHorizontalTiltAngle, 0);
@@ -303,7 +279,6 @@ class PowerViewPlatform {
     const service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.BOTTOM);
     if (!service || isNaN(value)) return;
 
-    // Vane position implies shade is closed.
     if (current) service.setCharacteristic(Characteristic.CurrentPosition, 0);
     service.updateCharacteristic(Characteristic.TargetPosition, 0);
     service.setCharacteristic(Characteristic.PositionState, Characteristic.PositionState.STOPPED);
@@ -336,7 +311,6 @@ class PowerViewPlatform {
 
   // ── Hub communication ───────────────────────────────────────────────
 
-  /** Discovers all shades and updates accessories. */
   updateShades(callback) {
     this.hub.getShades((err, shadeData) => {
       if (!err) {
@@ -360,14 +334,13 @@ class PowerViewPlatform {
     });
   }
 
-  /** Periodically polls shades for position changes. */
+  /** Polls all shades on a timer. This is the only source of position updates. */
   pollShades() {
-    this.updateShades((err) => {
-      setTimeout(() => this.pollShades(), this.pollIntervalMs);
-    });
+    setTimeout(() => {
+      this.updateShades(() => this.pollShades());
+    }, this.pollIntervalMs);
   }
 
-  /** Gets hub information at startup. */
   updateHubInfo(callback) {
     this.hub.getUserData((err, userData) => {
       if (!err) {
@@ -387,74 +360,9 @@ class PowerViewPlatform {
     });
   }
 
-  /** Gets a single shade's current state and updates values. */
-  updateShade(shadeId, refresh, callback) {
-    this.hub.getShade(shadeId, refresh, (err, shade) => {
-      if (!err) {
-        const positions = this.updateShadeValues(shade);
-        const timedOut = refresh ? shade.timedOut : null;
-        if (callback) callback(null, positions, timedOut);
-      } else {
-        this.log('Error getting shade %d: %s', shadeId, err);
-        if (callback) callback(err);
-      }
-    });
-  }
 
-  /** Gets a single shade position, with error handling. */
-  updatePosition(shadeId, position, refresh, callback) {
-    this.updateShade(shadeId, refresh, (err, positions, timedOut) => {
-      if (err) {
-        if (callback) callback(err);
-        this.log('Error %d/%d: %s', shadeId, position, err);
-        return;
-      }
+  // ── HomeKit SET handler ─────────────────────────────────────────────
 
-      if (refresh && timedOut) {
-        this.log('Timeout for %d/%d', shadeId, position);
-        if (callback) callback(new Error('Timed out'));
-        return;
-      }
-
-      if (!positions) {
-        this.log('Hub did not return positions for %d/%d', shadeId, position);
-      }
-
-      if (callback) {
-        if (positions && typeof positions[position] === 'number' && isFinite(positions[position])) {
-          this.log('updatePosition %d/%d: %d', shadeId, position, positions[position]);
-          callback(null, positions[position]);
-        } else {
-          this.log('Invalid position value for %d/%d, defaulting to 0', shadeId, position);
-          callback(null, 0);
-        }
-      }
-    });
-  }
-
-
-  // ── HomeKit characteristic callbacks ────────────────────────────────
-
-  /** Characteristic callback for CurrentPosition.get */
-  getPosition(shadeId, position, callback) {
-    this.log('getPosition %d/%d', shadeId, position);
-
-    this.updatePosition(shadeId, position, this.refreshShades, (err, value) => {
-      if (!err) {
-        // If not refreshing by default, try again with a refresh if no value.
-        if (!this.refreshShades && value == null) {
-          this.log('refresh %d/%d', shadeId, position);
-          this.updatePosition(shadeId, position, true, callback);
-        } else {
-          callback(null, value);
-        }
-      } else {
-        callback(err);
-      }
-    });
-  }
-
-  /** Characteristic callback for TargetPosition.set */
   setPosition(shadeId, position, value, callback) {
     this.log('setPosition %d/%d = %d', shadeId, position, value);
 
@@ -485,7 +393,6 @@ class PowerViewPlatform {
         this.updateShadeValues(shade, true);
         callback(null);
 
-        // Verify the command was applied after a delay.
         if (this.verifyCommands) {
           this._verifyCommand(shadeId, position, value, hubValue);
         }
@@ -496,36 +403,39 @@ class PowerViewPlatform {
   }
 
   /**
-   * After a SET command, waits then re-reads the shade position.
-   * If the shade didn't move, retries the command once.
+   * After a SET, waits then reads the shade position to confirm it moved.
+   * If it didn't, retries the command once.
    */
   _verifyCommand(shadeId, position, targetValue, hubValue) {
     setTimeout(() => {
-      this.log('Verifying shade %d/%d (target: %d)', shadeId, position, targetValue);
+      this.log('Verify shade %d/%d (target: %d)', shadeId, position, targetValue);
 
-      this.updatePosition(shadeId, position, true, (err, currentValue) => {
+      this.hub.getShade(shadeId, true, (err, shade) => {
         if (err) {
           this.log('Verify read failed for %d/%d: %s', shadeId, position, err);
           return;
         }
 
-        const tolerance = 5; // allow 5% tolerance
-        if (Math.abs(currentValue - targetValue) > tolerance) {
-          this.log(
-            'Shade %d/%d verify FAILED: expected ~%d, got %d. Retrying command.',
-            shadeId, position, targetValue, currentValue,
-          );
+        const positions = this.updateShadeValues(shade, true);
+        if (!positions) return;
 
-          this.hub.putShade(shadeId, position, hubValue, targetValue, (retryErr, shade) => {
+        const actual = positions[position];
+        const tolerance = 5;
+
+        if (actual != null && Math.abs(actual - targetValue) > tolerance) {
+          this.log('Verify FAILED %d/%d: expected ~%d, got %d. Retrying.',
+            shadeId, position, targetValue, actual);
+
+          this.hub.putShade(shadeId, position, hubValue, targetValue, (retryErr, retryShade) => {
             if (!retryErr) {
-              this.updateShadeValues(shade, true);
-              this.log('Shade %d/%d retry command sent', shadeId, position);
+              this.updateShadeValues(retryShade, true);
+              this.log('Retry sent for %d/%d', shadeId, position);
             } else {
-              this.log('Shade %d/%d retry failed: %s', shadeId, position, retryErr);
+              this.log('Retry failed for %d/%d: %s', shadeId, position, retryErr);
             }
           });
         } else {
-          this.log('Shade %d/%d verify OK: %d', shadeId, position, currentValue);
+          this.log('Verify OK %d/%d: %d', shadeId, position, actual);
         }
       });
     }, this.verifyDelayMs);

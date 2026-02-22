@@ -14,6 +14,7 @@ const Defaults = {
   REQUEST_TIMEOUT_MS: 10000,
   MAX_RETRIES: 2,
   RETRY_DELAY_MS: 2000,
+  CONCURRENCY: 2,
 };
 
 
@@ -27,9 +28,10 @@ class PowerViewHub {
     this.maxRetries = options.maxRetries != null ? options.maxRetries : Defaults.MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs || Defaults.RETRY_DELAY_MS;
     this.initialDelayMs = options.initialDelayMs || Defaults.INITIAL_DELAY_MS;
+    this.concurrency = options.concurrency || Defaults.CONCURRENCY;
 
     this.queue = [];
-    this.processing = false;
+    this.inFlight = 0;
   }
 
 
@@ -120,7 +122,7 @@ class PowerViewHub {
   }
 
   /**
-   * Add a request to the serial queue.
+   * Add a request to the queue.
    * item: { shadeId, action, data, qs, callbacks, retries }
    */
   _enqueue(item) {
@@ -128,65 +130,67 @@ class PowerViewHub {
     if (!item.callbacks) item.callbacks = [];
 
     this.queue.push(item);
-
-    if (!this.processing) {
-      this._processQueue(this.initialDelayMs);
-    }
+    this._scheduleNext(this.initialDelayMs);
   }
 
-  /** Process the queue one item at a time with delays between requests. */
-  _processQueue(delay) {
-    this.processing = true;
+  /** Schedule the next item if we have capacity. */
+  _scheduleNext(delay) {
+    if (this.queue.length === 0 || this.inFlight >= this.concurrency) return;
 
-    setTimeout(async () => {
-      if (this.queue.length === 0) {
-        this.processing = false;
+    setTimeout(() => {
+      if (this.queue.length === 0 || this.inFlight >= this.concurrency) return;
+      this._processItem();
+    }, delay);
+  }
+
+  /** Process a single item from the queue. */
+  async _processItem() {
+    if (this.queue.length === 0 || this.inFlight >= this.concurrency) return;
+
+    const item = this.queue.shift();
+    this.inFlight++;
+
+    try {
+      let result;
+      const path = '/api/shades/' + item.shadeId;
+
+      if (item.action === 'put') {
+        this.log('Queue: PUT shade %s %s', item.shadeId, JSON.stringify(item.data));
+        const json = await this._httpPut(path, { shade: item.data });
+        result = json.shade;
+      } else {
+        const json = await this._httpGet(path, item.qs || null);
+        result = json.shade;
+      }
+
+      for (const cb of item.callbacks) {
+        cb(null, result);
+      }
+    } catch (err) {
+      if (this._isRetryable(err) && item.retries < this.maxRetries) {
+        item.retries++;
+        this.log(
+          'Retry %d/%d for shade %s (%s)',
+          item.retries, this.maxRetries, item.shadeId, err.code || err.message,
+        );
+        this.queue.unshift(item);
+        this.inFlight--;
+        this._scheduleNext(this.retryDelayMs);
         return;
       }
 
-      const item = this.queue.shift();
-
-      try {
-        let result;
-        const path = '/api/shades/' + item.shadeId;
-
-        if (item.action === 'put') {
-          this.log('Queue: PUT shade %s %s', item.shadeId, JSON.stringify(item.data));
-          const json = await this._httpPut(path, { shade: item.data });
-          result = json.shade;
-        } else {
-          // GET (with optional ?refresh=true)
-          const json = await this._httpGet(path, item.qs || null);
-          result = json.shade;
-        }
-
-        for (const cb of item.callbacks) {
-          cb(null, result);
-        }
-      } catch (err) {
-        if (this._isRetryable(err) && item.retries < this.maxRetries) {
-          item.retries++;
-          this.log(
-            'Retry %d/%d for shade %s (%s)',
-            item.retries, this.maxRetries, item.shadeId, err.code || err.message,
-          );
-          this.queue.unshift(item);
-          this._processQueue(this.retryDelayMs);
-          return;
-        }
-
-        this.log('Error for shade %s: %s', item.shadeId, err.code || err.message);
-        for (const cb of item.callbacks) {
-          cb(err);
-        }
+      this.log('Error for shade %s: %s', item.shadeId, err.code || err.message);
+      for (const cb of item.callbacks) {
+        cb(err);
       }
+    }
 
-      if (this.queue.length > 0) {
-        this._processQueue(this.requestIntervalMs);
-      } else {
-        this.processing = false;
-      }
-    }, delay);
+    this.inFlight--;
+
+    // Schedule next item if queue has work.
+    if (this.queue.length > 0) {
+      this._scheduleNext(this.requestIntervalMs);
+    }
   }
 
 

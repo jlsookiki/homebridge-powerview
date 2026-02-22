@@ -1,89 +1,132 @@
-# homebridge-powerview-2
-[![npm](https://img.shields.io/npm/v/homebridge-powerview-2.svg)](https://www.npmjs.com/package/homebridge-powerview-2)
-[![npm](https://img.shields.io/npm/dt/homebridge-powerview-2.svg)](https://www.npmjs.com/package/homebridge-powerview-2)
+# homebridge-powerview
 
-**The PowerView homekit integration worked too slow for me and was unresponsive a lot of times thats why i forked this old plugin and made it kinda working again**
+[![npm](https://img.shields.io/npm/v/homebridge-powerview.svg)](https://www.npmjs.com/package/homebridge-powerview)
 
-**Pull requests welcome!**
+A [Homebridge](https://github.com/homebridge/homebridge) plugin for [Hunter Douglas PowerView](https://www.hunterdouglas.com/operating-systems/motorized/powerview-motorization) window shades with first-class **Gen 1 hub support**.
 
-This is a plugin for [Homebridge](https://github.com/nfarina/homebridge) to provide [HomeKit](https://www.apple.com/uk/ios/home/) support for [Hunter Douglas PowerView](https://www.hunterdouglas.com/operating-systems/motorized/powerview-motorization) window shades.
+Forked from [owenselles/homebridge-powerview-2](https://github.com/owenselles/homebridge-powerview-2) and substantially rewritten to fix reliability issues with Generation 1 hubs.
 
-Supports both the Generation 1 and 2 hubs.
+## What's Different
 
-Supported Shades:
+The original plugin fires concurrent HTTP requests to the PowerView hub. Gen 1 hubs have a tiny embedded webserver that crashes under this load, causing `ECONNRESET` errors, missed automations, and unresponsive shades. This fork fixes that:
 
- * Roller Shades.
- * Shades with Horizontal Vanes (e.g. Silhouette, Pirouette). The main accessory controls the vertical movement of the shades, and a slider under Details controls the tilt of the vanes when closed.
- * Shades with Vertical Vanes (e.g. Luminette). The main accessory controls the horizontal movement of the shades, and a slider under Details controls the tilt of the vanes when closed.
- * Top-Down/Bottom-Up Shades (e.g. Duette). You will get two accessories, one for the bottom of the shade, and one of the top. They can be controlled independently or combined using HomeKit scenes.
+- **Serialized request queue** — all requests to the hub are processed one at a time with configurable spacing (default 500ms). No more concurrent request floods.
+- **Automatic retries** — transient errors (`ECONNRESET`, timeouts) are retried automatically (configurable, default 2 retries).
+- **Command verification** — after sending a shade command, the plugin re-reads the shade position to confirm it actually moved. If not, it retries the command. This fixes the "1-2 shades miss every automation" problem.
+- **Request coalescing** — duplicate requests for the same shade are merged automatically, reducing hub load.
+- **Zero dependencies** — replaced the deprecated `request` npm package with Node's built-in `http` module.
+- **Homebridge 2.0 ready** — updated engine requirements, Node 18+.
+- **Config UI X support** — all settings are configurable through the Homebridge UI via `config.schema.json`.
 
-Shades can participate in HomeKit scenes and automations.
+## Supported Shades
+
+- **Roller Shades** — standard up/down control.
+- **Horizontal Vanes** (Silhouette, Pirouette) — main accessory controls vertical movement; a tilt slider under Details controls vane angle (0°–90°).
+- **Vertical Vanes** (Luminette) — main accessory controls horizontal movement; a tilt slider under Details controls vane angle (-90° to 90°).
+- **Top-Down/Bottom-Up** (Duette) — two accessories per shade, one for bottom and one for top, controllable independently or via scenes.
 
 ## Installation
 
-1. Install and setup [Homebridge](https://github.com/nfarina/homebridge).
-
+1. Install [Homebridge](https://github.com/homebridge/homebridge).
 2. Install this plugin:
-```
-npm install -g homebridge-powerview-2
-```
-3. Add the `PowerView` Platform to your Homebridge `config.json`:
 
+```bash
+npm install -g homebridge-powerview
 ```
-    "platforms" : [
-        {   
-            "platform" : "PowerView"
-        }
-    ]
+
+Or install from this repo directly:
+
+```bash
+npm install -g git+https://github.com/jlsookiki/homebridge-powerview.git
+```
+
+3. Add the platform to your `config.json`:
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PowerView",
+      "host": "192.168.1.28"
+    }
+  ]
+}
 ```
 
 ## Configuration
 
-Just specifying the platform should work for more people, the hub will be found using the default `powerview-hub.local` mDNS hostname.
+All settings are available through Config UI X, or can be set manually in `config.json`:
 
-### Hostname or IP
+| Setting | Default | Description |
+|---|---|---|
+| `host` | `powerview-hub.local` | Hub IP address or hostname |
+| `refreshShades` | `true` | Request fresh positions from shades via RF on each poll |
+| `pollShadesForUpdate` | `true` | Periodically poll for shade position changes |
+| `pollIntervalMs` | `60000` | How often to poll for updates (ms) |
+| `requestIntervalMs` | `500` | Delay between queued hub requests (ms). Gen 1 needs 500+. |
+| `requestTimeoutMs` | `10000` | Hub request timeout (ms) |
+| `maxRetries` | `2` | Retry attempts for transient errors |
+| `verifyCommands` | `true` | Re-read position after commands to confirm execution |
+| `verifyDelayMs` | `5000` | Delay before verification read (ms) |
 
-If your PowerView hub is configured with a different default hostname, you can specify that, or the hub's IP address, by adding a `host` key to the platform configuration:
+### Shade Type Overrides
 
+If the plugin doesn't recognize your shade type, you can force it:
+
+```json
+{
+  "platform": "PowerView",
+  "host": "192.168.1.28",
+  "forceRollerShades": [12345],
+  "forceTopBottomShades": [67890],
+  "forceHorizontalShades": [11111],
+  "forceVerticalShades": [22222]
+}
 ```
-"host" : "192.168.1.1"
+
+### Gen 1 Hub Tuning
+
+If you're still seeing occasional errors with a Gen 1 hub, try increasing the request spacing:
+
+```json
+{
+  "platform": "PowerView",
+  "host": "192.168.1.28",
+  "requestIntervalMs": 750,
+  "pollIntervalMs": 120000,
+  "maxRetries": 3
+}
 ```
 
-### Shade Types
+## How It Works
 
-The plugin uses the information from the PowerView hub to determine the types of shades, however it doesn't yet know all of the possible values. You may see the following warning in your log:
+### Request Queue
 
-```
-*** Shade 12345 has unknown type 66, assuming roller ***
-```
+Every request to the hub (GET, PUT, refresh) goes through a serial queue. Only one request is in-flight at a time. The queue automatically:
 
-If you see this, first please file an issue and provide details about the kind of shade that this is, so I can correctly recognize it in future versions.
+- **Spaces requests** by `requestIntervalMs` (default 500ms)
+- **Coalesces duplicates** — if HomeKit polls 9 shades at once, and shade #5 is already queued, the second request piggybacks on the first
+- **Merges PUT commands** — if two position changes arrive for the same shade before the first is sent, they're combined into a single request
+- **Retries on failure** — `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, and `EPIPE` errors trigger automatic retry with a 2-second backoff
 
-You can then add a `forceRollerShades`, `forceTopBottomShades`, `forceHorizontalShades`, or `forceVerticalShades` key to your `config.json` to force shades to be a certain type, e.g.:
+### Command Verification
 
-```
-"forceTopBottomShades": [ 12345, 98765 ]
-```
+When `verifyCommands` is enabled (default), after every SET command the plugin waits `verifyDelayMs` (default 5s), then reads the shade's actual position. If the shade didn't move to within 5% of the target, the command is automatically retried. This catches the cases where the hub acknowledged the command but the shade didn't respond (common with Gen 1 hubs under load or shades at the edge of RF range).
 
-## Shade Examples
+## Changelog
 
-For all shades, you can tab the accessory icons in the Home app to open and close the shades, or long-press to set any arbitrary position between closed and 100% open.
+### 2.0.0
 
-![Roller Shades](https://i.imgur.com/Ti2mc5z.png)
+- Rewrote `PowerViewHub.js`: all requests serialized through queue, native `http` module (zero dependencies), automatic retries with backoff
+- Rewrote `index.js`: ES6 classes, command verification, configurable poll intervals, cleaner characteristic management
+- Added `config.schema.json` for Config UI X support
+- Removed deprecated `request` npm dependency
+- Updated engine requirements: Node 18+, Homebridge 1.6+
 
-### Horizontal and Vertical Shades
+### 1.0.9
 
-For shades with horizontal or vertical vanes, after long-pressing you can tap Details to adjust the tilt angle. For horizontal shades this will range from 0&deg; to 90&deg;, where the vanes are closed at 0&deg;, and the vanes tilted fully open at 90&deg;. For vertical shades it will range from -90&deg; to 90&deg;, with the shades fully open at 0&deg;, and fully closed in either direction at -90&deg; and 90&deg;.
+- Last release of owenselles/homebridge-powerview-2
 
-Adjusting the vane tilt angle will automatically close the shades if necessary, likewise adjusting the standard shade position will automatically return the vanes to 0&deg;. When creating scenes, you should ensure that if the scene intends to tilt the vanes, the shade is Closed in the scene; likewise if the scene is intended to set a shade position, that the tilt is set to 0&deg;. HomeKit isn't smart enough to update the scene itself.
+## License
 
-![Horizontal Shades](https://i.imgur.com/CPNtR4g.png)
-
-### Top-Down/Bottom-Up Shades
-
-For shades with a movable top and bottom, two accessory controls will be created; one for the movable bottom of the shade, and the other for the movable top.
-
-These can be controlled independantly, or combined in scenes.
-
-![Top-Down/Bottom-Up Shades](https://i.imgur.com/ZFZXuPK.png)
-![Top-Down/Bottom-Up Scene](https://i.imgur.com/ylG0Yrp.png)
+ISC

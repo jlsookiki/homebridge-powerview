@@ -1,23 +1,26 @@
 {
-  "name": "homebridge-powerview-2",
-  "version": "1.0.9",
-  "description": "Updated Homebridge plugin for Hunter Douglas PowerView shades",
+  "name": "homebridge-powerview",
+  "version": "2.0.0",
+  "description": "Homebridge plugin for Hunter Douglas PowerView shades. Gen 1 hub compatible with serialized request queue, automatic retries, and command verification.",
   "license": "ISC",
   "keywords": [
-    "homebridge-plugin"
+    "homebridge-plugin",
+    "hunter-douglas",
+    "powerview",
+    "shades",
+    "blinds",
+    "window-coverings"
   ],
   "repository": {
     "type": "git",
-    "url": "git://github.com/owenselles/homebridge-powerview-2.git"
+    "url": "git://github.com/jlsookiki/homebridge-powerview.git"
   },
   "bugs": {
-    "url": "http://github.com/owenselles/homebridge-powerview-2/issues"
+    "url": "https://github.com/jlsookiki/homebridge-powerview/issues"
   },
   "engines": {
-    "node": ">=0.12.0",
-    "homebridge": "1.6.0"
+    "node": ">=18.0.0",
+    "homebridge": ">=1.6.0"
   },
-  "dependencies": {
-    "request": "^2.85.0"
-  }
+  "dependencies": {}
 }

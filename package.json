@@ -1,6 +1,6 @@
 {
   "name": "homebridge-powerview",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "description": "Homebridge plugin for Hunter Douglas PowerView shades. Gen 1 hub compatible with serialized request queue, automatic retries, and command verification.",
   "author": "jlsookiki",
   "license": "ISC",

@@ -1,7 +1,5 @@
 # homebridge-powerview
 
-[![npm](https://img.shields.io/npm/v/homebridge-powerview.svg)](https://www.npmjs.com/package/homebridge-powerview)
-
 A [Homebridge](https://github.com/homebridge/homebridge) plugin for [Hunter Douglas PowerView](https://www.hunterdouglas.com/operating-systems/motorized/powerview-motorization) window shades with first-class **Gen 1 hub support**.
 
 Forked from [owenselles/homebridge-powerview-2](https://github.com/owenselles/homebridge-powerview-2) and substantially rewritten to fix reliability issues with Generation 1 hubs.
@@ -10,13 +8,25 @@ Forked from [owenselles/homebridge-powerview-2](https://github.com/owenselles/ho
 
 The original plugin fires concurrent HTTP requests to the PowerView hub. Gen 1 hubs have a tiny embedded webserver that crashes under this load, causing `ECONNRESET` errors, missed automations, and unresponsive shades. This fork fixes that:
 
-- **Serialized request queue** — all requests to the hub are processed one at a time with configurable spacing (default 500ms). No more concurrent request floods.
+- **No blocking GET requests** — HomeKit reads the last known position pushed by polling. No per-shade HTTP calls when you open the Home app, so no callback timeouts.
+- **Serialized request queue** — all SET commands go through a serial queue with configurable spacing (default 500ms). No more concurrent request floods.
 - **Automatic retries** — transient errors (`ECONNRESET`, timeouts) are retried automatically (configurable, default 2 retries).
 - **Command verification** — after sending a shade command, the plugin re-reads the shade position to confirm it actually moved. If not, it retries the command. This fixes the "1-2 shades miss every automation" problem.
-- **Request coalescing** — duplicate requests for the same shade are merged automatically, reducing hub load.
+- **Request coalescing** — duplicate PUT requests for the same shade are merged automatically, reducing hub load.
 - **Zero dependencies** — replaced the deprecated `request` npm package with Node's built-in `http` module.
 - **Homebridge 2.0 ready** — updated engine requirements, Node 18+.
 - **Config UI X support** — all settings are configurable through the Homebridge UI via `config.schema.json`.
+
+## How It Works
+
+The architecture is intentionally simple:
+
+1. **Polling** fetches all shade positions from the hub every 60 seconds (configurable) and pushes them into HomeKit characteristics.
+2. **HomeKit reads** return instantly — they just read the last value that was pushed. No HTTP request to the hub.
+3. **SET commands** go through a serial queue to the hub, one at a time with 500ms spacing.
+4. **Verification** (optional, on by default) re-reads the shade position after a SET to confirm it worked. If it didn't, retries once.
+
+This means opening the Home app never hammers the hub, automations execute reliably in sequence, and missed commands get caught and retried.
 
 ## Supported Shades
 
@@ -60,13 +70,11 @@ All settings are available through Config UI X, or can be set manually in `confi
 | Setting | Default | Description |
 |---|---|---|
 | `host` | `powerview-hub.local` | Hub IP address or hostname |
-| `refreshShades` | `true` | Request fresh positions from shades via RF on each poll |
-| `pollShadesForUpdate` | `true` | Periodically poll for shade position changes |
-| `pollIntervalMs` | `60000` | How often to poll for updates (ms) |
+| `pollIntervalMs` | `60000` | How often to poll for shade position updates (ms) |
 | `requestIntervalMs` | `500` | Delay between queued hub requests (ms). Gen 1 needs 500+. |
 | `requestTimeoutMs` | `10000` | Hub request timeout (ms) |
 | `maxRetries` | `2` | Retry attempts for transient errors |
-| `verifyCommands` | `true` | Re-read position after commands to confirm execution |
+| `verifyCommands` | `true` | Re-read position after SET commands to confirm execution |
 | `verifyDelayMs` | `5000` | Delay before verification read (ms) |
 
 ### Shade Type Overrides
@@ -98,27 +106,23 @@ If you're still seeing occasional errors with a Gen 1 hub, try increasing the re
 }
 ```
 
-## How It Works
-
-### Request Queue
-
-Every request to the hub (GET, PUT, refresh) goes through a serial queue. Only one request is in-flight at a time. The queue automatically:
-
-- **Spaces requests** by `requestIntervalMs` (default 500ms)
-- **Coalesces duplicates** — if HomeKit polls 9 shades at once, and shade #5 is already queued, the second request piggybacks on the first
-- **Merges PUT commands** — if two position changes arrive for the same shade before the first is sent, they're combined into a single request
-- **Retries on failure** — `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, and `EPIPE` errors trigger automatic retry with a 2-second backoff
-
-### Command Verification
-
-When `verifyCommands` is enabled (default), after every SET command the plugin waits `verifyDelayMs` (default 5s), then reads the shade's actual position. If the shade didn't move to within 5% of the target, the command is automatically retried. This catches the cases where the hub acknowledged the command but the shade didn't respond (common with Gen 1 hubs under load or shades at the edge of RF range).
-
 ## Changelog
+
+### 2.0.2
+
+- Removed blocking GET handlers entirely — HomeKit reads cached values pushed by polling
+- Eliminated callback timeout errors
+- Simplified architecture: polling updates positions, queue handles SETs and verification only
+
+### 2.0.1
+
+- Added author field to package.json
+- Fixed Homebridge 2.0 engine compatibility range
 
 ### 2.0.0
 
 - Rewrote `PowerViewHub.js`: all requests serialized through queue, native `http` module (zero dependencies), automatic retries with backoff
-- Rewrote `index.js`: ES6 classes, command verification, configurable poll intervals, cleaner characteristic management
+- Rewrote `index.js`: ES6 classes, command verification, configurable poll intervals
 - Added `config.schema.json` for Config UI X support
 - Removed deprecated `request` npm dependency
 - Updated engine requirements: Node 18+, Homebridge 1.6+

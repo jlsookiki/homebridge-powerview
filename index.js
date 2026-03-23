@@ -98,10 +98,8 @@ class PowerViewPlatform {
 
   configureAccessory(accessory) {
     this.log('Cached shade %d: %s', accessory.context.shadeId, accessory.displayName);
-    accessory.reachable = true;
-
     if (!accessory.context.shadeType) {
-      const service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.TOP);
+      const service = accessory.getServiceById(Service.WindowCovering, SubType.TOP);
       accessory.context.shadeType = service ? Shade.TOP_BOTTOM : Shade.ROLLER;
     }
 
@@ -153,7 +151,7 @@ class PowerViewPlatform {
     this.accessories[shadeId] = accessory;
 
     // Bottom / primary service
-    let service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.BOTTOM);
+    let service = accessory.getServiceById(Service.WindowCovering, SubType.BOTTOM);
     if (!service) {
       service = accessory.addService(Service.WindowCovering, accessory.displayName, SubType.BOTTOM);
     }
@@ -184,7 +182,7 @@ class PowerViewPlatform {
     }
 
     // Top service (top-down/bottom-up shades)
-    let topService = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.TOP);
+    let topService = accessory.getServiceById(Service.WindowCovering, SubType.TOP);
     if (accessory.context.shadeType === Shade.TOP_BOTTOM) {
       if (!topService) {
         topService = accessory.addService(Service.WindowCovering, accessory.displayName, SubType.TOP);
@@ -258,7 +256,7 @@ class PowerViewPlatform {
   }
 
   _updateBottomPosition(accessory, value, current) {
-    const service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.BOTTOM);
+    const service = accessory.getServiceById(Service.WindowCovering, SubType.BOTTOM);
     if (!service || isNaN(value)) return;
 
     if (current) service.setCharacteristic(Characteristic.CurrentPosition, value);
@@ -276,7 +274,7 @@ class PowerViewPlatform {
   }
 
   _updateHorizontalVanes(accessory, value, current) {
-    const service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.BOTTOM);
+    const service = accessory.getServiceById(Service.WindowCovering, SubType.BOTTOM);
     if (!service || isNaN(value)) return;
 
     if (current) service.setCharacteristic(Characteristic.CurrentPosition, 0);
@@ -288,7 +286,7 @@ class PowerViewPlatform {
   }
 
   _updateVerticalVanes(accessory, value, current) {
-    const service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.BOTTOM);
+    const service = accessory.getServiceById(Service.WindowCovering, SubType.BOTTOM);
     if (!service) return;
 
     if (current) service.setCharacteristic(Characteristic.CurrentPosition, 0);
@@ -300,7 +298,7 @@ class PowerViewPlatform {
   }
 
   _updateTopPosition(accessory, value, current) {
-    const service = accessory.getServiceByUUIDAndSubType(Service.WindowCovering, SubType.TOP);
+    const service = accessory.getServiceById(Service.WindowCovering, SubType.TOP);
     if (!service || isNaN(value)) return;
 
     if (current) service.setCharacteristic(Characteristic.CurrentPosition, value);
